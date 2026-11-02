@@ -19,9 +19,32 @@
 |---|---------|------|
 | 1 | WorkBuddy 桌面端已登录 | 用你自己的账号登录即可，**必须先登录** |
 | 2 | GitHub 账号（免费） | 用于建你的私有仓库和跑云端兜底 |
-| 3 | 飞书群机器人 webhook（可选） | 想收签到卡片就配；不配也能正常签到 |
+| 3 | 推送通道（可选） | 想收签到通知就配一个，见下方「推送通道」 |
 
-> 飞书机器人怎么建：飞书群 → 设置 → 群机器人 → 添加「自定义机器人」→ 复制 Webhook 地址（安全设置选「自定义关键词」，填 `签到`）。
+> 不配推送也完全不影响签到，只是收不到通知。
+
+## 推送通道（可选，四选一或多选）
+
+配哪个通道，就把对应的 Secret 交给部署流程写入你的私有仓库：
+
+| 通道 | 推到哪 | 用户准备什么 | Secret 名 | 免费额度 |
+|------|--------|-------------|-----------|---------|
+| A. 飞书机器人 | 飞书群（卡片） | 飞书群 → 设置 → 群机器人 → 自定义机器人 → 复制 Webhook（安全设置选「自定义关键词」填 `签到`） | `FEISHU_WEBHOOK` | 无限 |
+| B. 企业微信机器人 | 企业微信群 | 注册企业微信（个人免费）→ 建群 → 群机器人 → 复制 Webhook | `WECOM_WEBHOOK` | 无限 |
+| C. Server酱 | **个人微信** | 微信扫码登录 [sct.ftqq.com](https://sct.ftqq.com) → 关注「方糖」服务号 → 复制 SendKey | `SERVERCHAN_SENDKEY` | 5 条/天（本任务一天 2 条，够用） |
+| D. 微信测试号 | **个人微信** | ① 微信扫码登录 [公众平台测试号](https://mp.weixin.qq.com/debug/cgi-bin/sandboxinfo?action=showinfo&t=sandbox/index) 拿 `appID`/`appSecret`；② 页面「测试号二维码」用个人微信扫码关注，用户列表里复制你的 `openid`；③ 「新增测试模板」，内容填：
+
+```
+结果：{{result.DATA}}
+积分：{{credit.DATA}}
+累积：{{total.DATA}}　连签：{{streak.DATA}} 天
+{{report.DATA}}
+{{beat.DATA}}
+```
+
+保存后复制模板 ID | `WXTEST_APPID` / `WXTEST_SECRET` / `WXTEST_OPENID` / `WXTEST_TEMPLATE_ID` | 无限 |
+
+> D 通道消息直达个人微信（显示为服务号通知样式），免费无限制，就是准备工作多一点；C 通道 1 分钟搞定但每天 5 条上限。想省事选 C，想长期免费用选 D，本来就常用飞书/企业微信选 A/B。
 
 ## 一条命令
 
@@ -60,11 +83,12 @@ gh auth status
 
 | 参数 | 问法 | 默认 |
 |------|------|------|
-| 飞书 webhook | 「有飞书机器人 webhook 吗？没有就跳过」 | 无 |
+| 推送通道 | 「想收签到通知吗？A 飞书 / B 企业微信 / C Server酱 / D 微信测试号，可多选；不想要就跳过」 | 无 |
 | 签到时间 | 「每天几点主签？」 | 09:30 |
 | 补签班次 | 「补签班次默认 01/05/09/13/17/21 点，要改吗？」 | 默认六班 |
 
-记下 `$feishu`（可为空）、`$signinTime`、`$pollTimes`。
+记下所选通道对应的全套 Secret 值（每个通道需要哪些 Secret 见上方「推送通道」表格）、`$signinTime`、`$pollTimes`。
+选 D（测试号）时把模板模板内容原文发给用户，让 ta 粘贴到测试号「新增测试模板」里。
 
 ### 第 3 步 · 创建用户自己的私有仓库
 
@@ -92,10 +116,16 @@ gh auth refresh -s workflow    # 带用户再授权一次，补上 workflow scop
 git push -u origin main
 ```
 
-然后（如用户提供了 webhook）：
+然后写入用户在**第 2 步选择的推送通道** Secret（没选的通道跳过）：
 
 ```powershell
-$feishu | gh secret set FEISHU_WEBHOOK --repo $repo
+"<值>" | gh secret set FEISHU_WEBHOOK --repo $repo        # A 飞书
+"<值>" | gh secret set WECOM_WEBHOOK --repo $repo         # B 企业微信
+"<值>" | gh secret set SERVERCHAN_SENDKEY --repo $repo    # C Server酱
+"<值>" | gh secret set WXTEST_APPID --repo $repo          # D 测试号（4 个都写）
+"<值>" | gh secret set WXTEST_SECRET --repo $repo
+"<值>" | gh secret set WXTEST_OPENID --repo $repo
+"<值>" | gh secret set WXTEST_TEMPLATE_ID --repo $repo
 ```
 
 ### 第 5 步 · 运行一键安装
