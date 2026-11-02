@@ -1,0 +1,14 @@
+# machine-specific / runtime artifacts — never commit
+config.json
+signin.log
+refresh-secret.log
+*.log
+_*.txt
+__pycache__/
+*.pyc
+auth/
+exported/
+credential*.json
+*credential*.json
+!export-credential.py
+bin/
