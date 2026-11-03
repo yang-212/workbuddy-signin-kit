@@ -128,107 +128,29 @@ jobs:
           PY
           cat "$RUNNER_TEMP/summary.env" >> "$GITHUB_ENV"
 
-      # 每班都推：这张卡就是该班任务的「心跳」——收到卡 = 这班确实跑了。
-      # 推送自身挂掉只报 warning，不把一次已经成功的签到染红。
-      - name: 推送到飞书
+      # 每班都推：这张通知就是该班任务的「心跳」——收到 = 这班确实跑了。
+      # 推送逻辑全部在 notify.py（普通文件，Contents API 可直接更新，无需 workflow scope），
+      # 四通道自适应：配了哪个 Secret 就走哪个通道，可同时配多个：
+      #   FEISHU_WEBHOOK      飞书群机器人（交互卡片）
+      #   WECOM_WEBHOOK       企业微信群机器人（markdown 消息）
+      #   SERVERCHAN_SENDKEY  Server酱（个人微信）
+      #   WXTEST_APPID / WXTEST_SECRET / WXTEST_OPENID / WXTEST_TEMPLATE_ID
+      #                       微信公众平台测试号（个人微信，免费无限制）
+      - name: 推送通知（飞书 / 企业微信 / Server酱 / 微信测试号）
         if: always()
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          WXTEST_APPID: ${{ secrets.WXTEST_APPID }}
+          WXTEST_SECRET: ${{ secrets.WXTEST_SECRET }}
+          WXTEST_OPENID: ${{ secrets.WXTEST_OPENID }}
+          WXTEST_TEMPLATE_ID: ${{ secrets.WXTEST_TEMPLATE_ID }}
           EVENT_NAME: ${{ github.event_name }}
           SCHEDULE_CRON: ${{ github.event.schedule }}
           RUN_STARTED: ${{ github.run_started_at }}
           RUN_ID: ${{ github.run_id }}
-        run: |
-          if [ -z "${FEISHU_WEBHOOK:-}" ]; then
-            echo "未配置 FEISHU_WEBHOOK，跳过推送"
-            exit 0
-          fi
-          python - <<'PY' || echo "::warning::飞书推送失败，但不影响本次签到结论"
-          import json, os, urllib.request
-          from datetime import datetime, timedelta, timezone
-
-          ok = os.environ.get("SIGNIN_OK") == "true"
-          result = os.environ.get("SIGNIN_RESULT", "UNKNOWN")
-          report = os.environ.get("REPORT", "")
-          credit = os.environ.get("CREDIT", "").strip()
-          total = os.environ.get("TOTAL_CREDITS", "").strip()
-          streak = os.environ.get("STREAK_DAYS", "").strip()
-          hook = os.environ["FEISHU_WEBHOOK"]
-          event = os.environ.get("EVENT_NAME", "")
-          cron = os.environ.get("SCHEDULE_CRON", "").strip()
-          run_id = os.environ.get("RUN_ID", "")
-
-          # —— 心跳行：计划班次 vs 实际执行，GitHub 排队延迟一目了然 ——
-          CRON_BJ = {"43 21 * * *": "05:43", "43 4 * * *": "12:43"}
-          beat = "手动触发" if event != "schedule" else "计划班次 %s" % (CRON_BJ.get(cron, cron or "?"))
-          if event == "schedule" and cron in CRON_BJ and os.environ.get("RUN_STARTED"):
-              try:
-                  start = datetime.fromisoformat(os.environ["RUN_STARTED"].replace("Z", "+00:00"))
-                  bj = start.astimezone(timezone(timedelta(hours=8)))
-                  hh, mm = map(int, CRON_BJ[cron].split(":"))
-                  cand = [(bj - timedelta(days=d)).replace(hour=hh, minute=mm, second=0, microsecond=0) for d in (0, 1)]
-                  planned = max(c for c in cand if c <= bj)
-                  mins = int((bj - planned).total_seconds() // 60)
-                  beat = "计划 %s → 实际 %s（排队延迟 %d 小时 %d 分）" % (
-                      CRON_BJ[cron], bj.strftime("%H:%M"), mins // 60, mins % 60)
-              except Exception:
-                  pass
-
-          # —— 统计栏：三格灰底（签到结果 / 累积获得 / 连签天数）——
-          def col(text):
-              return {"tag": "column", "width": "weighted", "weight": 1,
-                      "elements": [{"tag": "div",
-                                    "text": {"tag": "lark_md", "content": text}}]}
-
-          if ok:
-              sign = ("领取 + %s 积分" % credit) if (result == "CLAIMED" and credit) else "已签过 ✓"
-              streak_col = col(("连续签到\n**%s 天**" % streak) if streak else "连续签到\n**—**")
-          else:
-              sign = result
-              streak_col = col("连续签到\n**—**")
-          stat = {
-              "tag": "column_set", "flex_mode": "trisect",
-              "background_style": "grey", "horizontal_spacing": "default",
-              "columns": [
-                  col("今日签到\n**%s**" % sign),
-                  col("累积获得\n**%s**" % (total or "—")),
-                  streak_col,
-              ],
-          }
-
-          # —— 状态的短释义（卡片 note 行用）——
-          RESULT_SHORT = {
-              "CLAIMED": "已领取", "ALREADY": "已签过·幂等跳过",
-              "SUCCESS": "成功", "GROWTH": "成长完成",
-          }
-
-          payload = {
-              "msg_type": "interactive",
-              "card": {
-                  "config": {"wide_screen_mode": True},
-                  "header": {
-                      "template": "green" if ok else "red",
-                      "title": {"tag": "plain_text",
-                                "content": ("✅ WorkBuddy 签到正常" if ok else "❌ WorkBuddy 签到异常")},
-                  },
-                  "elements": [
-                      stat,
-                      {"tag": "hr"},
-                      {"tag": "div", "text": {"tag": "lark_md", "content": report}},
-                      {"tag": "hr"},
-                      {"tag": "note", "elements": [{"tag": "plain_text",
-                        "content": "🕐 %s ｜ 云端兜底 ｜ 状态 %s · %s ｜ run %s" % (
-                            beat, result, RESULT_SHORT.get(result, "未知"), run_id)}]},
-                  ],
-              },
-          }
-          req = urllib.request.Request(
-              hook, data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"}, method="POST")
-          with urllib.request.urlopen(req, timeout=20) as resp:
-              print("feishu http", resp.status)
-          PY
-
+        run: python notify.py
       - name: 清理凭据
         if: always()
         run: rm -rf "$RUNNER_TEMP/auth"
